@@ -1,0 +1,195 @@
+#!/usr/bin/env python
+
+from common.grabber_manager import GrabberManager
+from common.grabber_worker import GrabberWorker
+from common.calc_manager import CalcManager
+from common.calc_worker import CalcWorker
+from common.echo import echo, debug, warn, err
+from tmtags import TMTAGS
+from msgtype import MsgType
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+from messages import *
+from common.vender_info import vender_dict
+from common.stat_time import StatTime
+from common.stat_user import UsersInfo, StatUser
+from core.mydb import Mydb
+import datetime
+import json
+
+mongo_host = "127.0.0.1"
+mongo_port = 27017
+
+def default_encoder(obj):
+    return obj.__json__()
+
+class LogEntry(object):
+    def __init__(self, raw):
+        self.doc = raw
+
+    def get_vender(self):
+        if 'sourceId' in self.doc:
+            return self.doc['sourceId'].strip()
+        else:
+            return None
+
+    def get_userid(self):
+        if 'deviceId' in self.doc:
+            return self.doc['deviceId'].strip()
+        else:
+            return None
+
+    def get_ts(self):
+        if 'ts' in self.doc:
+            return self.doc['ts'].strip()
+        else:
+            return None
+
+class PlayerStartupGrabber(GrabberWorker):
+    def __init__(self, msgh, mgrq, myname, config):
+        GrabberWorker.__init__(self, msgh, mgrq, myname, config)
+        self.mongocli = MongoClient(mongo_host, mongo_port)
+        self.logdb = self.mongocli.vodlog
+        self.player_startup = self.logdb.player_startup
+
+    def _grab(self):
+        start_pos = str(self.config['start'])
+        end_pos = str(self.config['end'])
+        cursor = self.player_startup.find(
+            {'ts': {'$gt': start_pos, '$lte': end_pos}})
+        self.count = cursor.count()
+        echo("PlayerStartupGrabber::process [%s] %s record has been found"%
+             (self.pid, self.count))
+        for record in cursor:
+            self._handle_record(record)
+            self.current += 1
+
+    def _handle_record(self, doc):
+        e = LogEntry(doc)
+        msg = MsgPlayerStartupCalc()
+        msg.set_userid(e.get_userid())
+        msg.set_timestamp(e.get_ts())
+        msg.set_vender(e.get_vender())
+        i = self.next_rrobin()
+        self.queue.send(self.calc_queues[i], msg)
+
+
+class PlayerStartupCollector(object):
+    def __init__(self, vender, start, end):
+        self.vender = vender
+        self.stat_time = StatTime(start, end)
+
+    def get_vender(self):
+        return self.vender
+
+    def __repr__(self):
+        s = "vender: %s, info: %s"%(self.vender, repr(self.stat_time))
+        return s
+        
+class PlayerStartupCalc(CalcWorker):
+    def __init__(self, msgh, mgrq, myname, config):
+        CalcWorker.__init__(self, msgh, mgrq, myname, config)
+        self.report_intvl = 4
+        self.report_threshold = 50
+        #self.collectors = {}
+        #self.eh.register_timer(self.report_intvl * 1000,
+        #                       TMTAGS.SEND_REPORT, True)
+        self.stat_user = StatUser(self.config['start'], self.config['end'])
+
+    def _process_msg(self, msg):
+        msgtype = msg.get_msgtype()
+        if msgtype == MsgType.MsgPlayerStartupCalc:
+            calc_msg = MsgPlayerStartupCalc()
+            calc_msg.cast(msg)
+            calc_msg.parse()
+            ts = calc_msg.get_timestamp()
+            user = calc_msg.get_userid()
+            vender = calc_msg.get_vender()
+            if vender in vender_dict:
+                vender = vender_dict[vender]
+            if ts.find('.') != -1:
+                warn("invalid timestamp %s for user %s"%(ts, user))
+                return
+            self.stat_user.mark(user, ts, vender)
+            if self.stat_user.count_user() > self.report_threshold:
+                self._send_report()
+            self.current += 1
+        else:
+            super(PlayerStartupCalc, self)._process_msg(msg)
+
+    def _process_timer(self, msg):
+        tag = msg.get_tag()
+        if tag == TMTAGS.SEND_REPORT:
+            self._send_report()
+        else:
+            super(PlayerStartupCalc, self)._process_timer(msg)
+
+    def _send_report(self):
+        ptr_msg = MsgPlayerStartupReport()
+         #self.stat_user.show_user_info().replace('\\', '')
+        ptr_msg.set_report_info(
+            self.stat_user.show_user_info())
+        self.queue.send(self.mgrq, ptr_msg)
+        self.stat_user.clear_data()
+
+    def _final(self):
+        self._send_report()
+        super(PlayerStartupCalc, self)._final()
+        
+report_file = "player_startup_rpt"
+class PlayerStartupCalcMgr(CalcManager):
+    def __init__(self, msgh, config):
+        CalcManager.__init__(self, msgh)
+        self.report_fd = None
+        self.collectors = {}
+        self.config = config
+        self.stat_user = StatUser(config['start'], config['end'])
+        self.rpt_print_intvl = 4
+        self.eh.register_timer(self.rpt_print_intvl * 1000,
+                               TMTAGS.PRINT_REPORT, True)
+        self.db = Mydb()
+        self.db.connect('report')
+        self.dbsession = self.db.open('active_users')
+
+    def set_config(self, config):
+        self.config = config
+
+    def _process_msg(self, msg):
+        debug("PlayerStartupCalcMgr::_process_msg() enter")
+        msgtype = msg.get_msgtype()
+        if msgtype == MsgType.MsgPlayerStartupReport:
+            debug("PlayerStartupCalcMgr::_process_my_msg got "
+                  "report message %s"%msg.get_body())
+            ptr_msg = MsgPlayerStartupReport()
+            ptr_msg.cast(msg)
+            data = json.loads(ptr_msg.get_report_info())
+            for user, play_info in data.items():
+                self.stat_user.merge_user_info(user, play_info)
+            #for vender, counts in data.items():
+            #    self.collectors[vender].stat_time.merge(counts)
+        else:
+            super(PlayerStartupCalcMgr, self)._process_msg(msg)
+
+    def _process_timer(self, msg):
+        tag = msg.get_tag()
+        if tag == TMTAGS.PRINT_REPORT:
+            self._print_report()
+        else:
+            super(PlayerStartupCalcMgr, self)._process_timer(msg)
+
+    def _print_report(self):
+        print "currently the total user:", self.stat_user.count_user()
+        data = {"vender": 'HISENSE',
+                'date': '%s_%s'%(self.config['start'],
+                                 self.config['end']),
+                'count': self.stat_user.count_user()}
+        
+        self.dbsession.insert(data)
+
+    def user_report(self):
+        pass
+
+    def vender_user_report():
+        pass
+    
+
