@@ -1,4 +1,4 @@
-Statistic Analysis Fromework
+Statistic Analysis Framework
 
 a simple statistic framework, support asynchronous data grabber and data calculation,
 a text based database is used for report data.
