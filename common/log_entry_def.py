@@ -31,11 +31,15 @@ class Entry(object):
         self.ts = ''
         self.navid = ''
         self.retention = ''
+        self.mediaid = ''
         self.vender = self.__class__.__name__ + "_vender"
         self.typecode = self.__class__.__name__ + "_typecode"
 
     def parse(self):
         pass
+
+    def get_mediaid(self):
+        return self.mediaid
 
     def get_code(self):
         return self.code
@@ -71,8 +75,10 @@ class Log_5010_Entry(Entry):
             self.ts = self.doc[-5]
             if self.version == '1.0':
                 self.vender = self.doc[-4]
+                self.mediaid = self.doc[11]
             elif self.version == "1.1":
                 self.vender = self.doc[-2]
+                self.mediaid = self.doc[10]
             else:
                 err('Log_5010_Entry::parse() invalid version %s'%self.version)
                 return False
@@ -149,6 +155,7 @@ class Log_5011_Entry(Entry):
         try:
             self.userid = self.doc[4]
             self.ts = self.doc[9]
+            self.mediaid = self.doc[10]
             if self.version == "1.1":
                 self.retention = int(self.doc[14])/1000
                 self.vender = self.doc[12]

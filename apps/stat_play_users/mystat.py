@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 from common.grabber_manager import GrabberManager
 from common.grabber_worker import GrabberWorker
@@ -30,22 +31,23 @@ def default_encoder(obj):
 class PlayUserGrabber(GrabberWorker):
     def __init__(self, msgh, mgrq, myname, config):
         GrabberWorker.__init__(self, msgh, mgrq, myname, config)
-        self.log_path = '/data/logs/'
+        self.log_path = '/data/logs/source'
         self.work_dir = '/data/logs/work/'
 
     def _grab_files(self):
-        spos = int(str(self.config['start']))
-        epos = int(str(self.config['end']))
+        spos = int(str(self.config['log_start_ts']))
+        epos = int(str(self.config['log_end_ts']))
         ret = []
         dates = []
         for f in os.listdir(self.log_path):
             if f[0:4] != 'vod_' or f[-7:] != '.log.gz':
                 continue
-            date = f[4:12]
+            date = f[4:18]
             try:
-                ts = int(time.mktime(time.strptime(date, "%Y%m%d")) * 1000)
+                ts = int(time.mktime(time.strptime(date, "%Y%m%d%H%M%S")) * 1000)
             except Exception, e:
                 continue
+            #print ts, spos, epos, datetime.datetime.fromtimestamp(ts/1000), datetime.datetime.fromtimestamp(spos/1000), datetime.datetime.fromtimestamp(epos/1000)
             if ts >= spos and ts < epos:
                 dates.append(f)
             dates = sorted(dates)
@@ -55,15 +57,15 @@ class PlayUserGrabber(GrabberWorker):
         for log_gz_file in self._grab_files():
             echo("processing %s"%log_gz_file)
             dirname = os.path.dirname(log_gz_file)
-            input_file = log_gz_file[:-3]
+            input_file = log_gz_file
             input_file_base_name = os.path.basename(input_file)
             new_input_file = \
-                os.path.join(self.work_dir, input_file_base_name)
+                os.path.join(self.work_dir, input_file_base_name[:-3])
             
             if not os.path.exists(new_input_file):
-                #print 'cp %s %s'%(log_gz_file, self.work_dir)
+                print 'cp %s %s'%(log_gz_file, self.work_dir)
                 os.system('cp %s %s'%(log_gz_file, self.work_dir))
-                #print 'cd %s;gunzip %s'%(self.work_dir, input_file_base_name)
+                print 'cd %s;gunzip %s'%(self.work_dir, input_file_base_name)
                 os.system('cd %s;gunzip %s'%(self.work_dir, input_file_base_name))
             fd = open(new_input_file, "r")
             for record in fd:
@@ -196,10 +198,12 @@ class PlayUserCalcMgr(CalcManager):
             data['vender'] = vender
             data['count'] = count
             self.dbsession.insert(data)
+        self.dbsession.commit()
         
         data['vender'] = "HISENSE"
         data['count'] = self.stat_user.count_user()
         self.dbsession.insert(data)
+        self.dbsession.commit()
         self.dbsession.close()
         
     def _user_report_day(self):
@@ -215,6 +219,7 @@ class PlayUserCalcMgr(CalcManager):
                 data['date'] = day
                 data['count'] = count
                 self.dbsession.insert(data)
+        self.dbsession.commit()
 
         infos = self.stat_user.gen_stat_users().show_info()
         data['vender'] = 'HISENSE'
@@ -222,6 +227,7 @@ class PlayUserCalcMgr(CalcManager):
             data['date'] = day
             data['count'] = count
             self.dbsession.insert(data)
+        self.dbsession.commit()
         self.dbsession.close()
 
     def _times_report_total(self):
@@ -235,10 +241,12 @@ class PlayUserCalcMgr(CalcManager):
             data['vender'] = vender
             data['count'] = count
             self.dbsession.insert(data)
+        self.dbsession.commit()
 
         data['vender'] = "HISENSE"
         data['count'] = self.stat_user.gen_stat_count()
         self.dbsession.insert(data)
+        self.dbsession.commit()
         self.dbsession.close()
 
     def _times_report_day(self):
@@ -254,6 +262,7 @@ class PlayUserCalcMgr(CalcManager):
                 data['date'] = day
                 data['count'] = count
                 self.dbsession.insert(data)
+        self.dbsession.commit()
 
         infos = self.stat_user.gen_stat_times().show_info()
         data['vender'] = 'HISENSE'
@@ -261,4 +270,5 @@ class PlayUserCalcMgr(CalcManager):
             data['date'] = day
             data['count'] = count
             self.dbsession.insert(data)
+        self.dbsession.commit()
         self.dbsession.close()

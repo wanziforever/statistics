@@ -55,6 +55,9 @@ class MySession(object):
         self._init_fields()
         self.entries = {}
         self._init_entries()
+        self.buffers = []
+        #self.num_not_flush = 0
+        #self.num_need_flush = 100000
 
     def _lock(self):
         lf = os.path.join(db_path, self.dbname, ".lock_"+self.tbname)
@@ -103,7 +106,6 @@ class MySession(object):
         key = hash_key(k)
         return key
             
-        
     def close(self):
         if self.opened == False:
             err("session %s already closed"%self.tbname)
@@ -128,7 +130,24 @@ class MySession(object):
         if self.opened is False:
             err("MySession::_append_entry() session is not opened")
             return False
-        self.fd.write('|'.join(values)+"\n")
+        self.buffers.append(values)
+
+    def commit(self):
+        s = ""
+        for entry in self.buffers:
+            s += '|'.join(entry)+"\n"
+            #self.num_not_flush += 1
+        self.fd.write(s)
+        self.buffers = []
+        #if self.num_not_flush >= self.num_need_flush:
+        #    self.num_not_flush = 0
+        #    self._flush_data()
+        self._flush_data()
+
+    def _flush_data(self):
+        if self.opened is False:
+            err("MySession::_append_entry() session is not opened")
+            return False
         self.fd.flush()
 
     def insert(self, kwargs, to_update=True):
@@ -213,22 +232,27 @@ class MySession(object):
             entries = self._select(key)
 
         if printable == True:
-            for key, values in entries.items():
+            for key, values in entries:
                 print "|".join(values)
                 
+        #return entries
         return entries
         
 
     def _select_all(self):
-        return self.entries
+        if len(self.entries) == 0:
+            return None
+        return self.entries.items()
 
     def _select(self, key):
         if not isinstance(key, dict):
             err("MySession::_select() invalid key type, dict is required")
             return None
         key = hash_key(key)
-        values = self.entries[key]
-        return {key: values}
+        value = self.entries.get(key, None)
+        if value is None:
+            return None
+        return [key, value]
 
     def __repr__(self):
         s = "table: %s, key="%self.tbname
@@ -264,5 +288,3 @@ class Mydb(object):
             print repr(e)
             return None
         return MySession(self.name, table_name)
-            
-

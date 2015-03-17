@@ -30,42 +30,41 @@ def default_encoder(obj):
 class ActiveUserNginxGrabber(GrabberWorker):
     def __init__(self, msgh, mgrq, myname, config):
         GrabberWorker.__init__(self, msgh, mgrq, myname, config)
-        self.log_path = '/data/logs/nginx'
+        self.log_path = '/data/logs/source/'
         self.work_dir = '/data/logs/work/'
         self.ip_mapping = {}
 
     def _grab_files(self):
         nginx_files = []
-        spos = int(str(self.config['start']))
-        epos = int(str(self.config['end']))
+        spos = int(str(self.config['log_start_ts']))
+        epos = int(str(self.config['log_end_ts']))
         for f in os.listdir(self.log_path):
             if f[0:7] != 'api.vod':
                 continue
-            date = f[-10:-2]
+            date = f[-14:-4]
             try:
-                ts = int(time.mktime(time.strptime(date, "%Y%m%d")) * 1000)
+                ts = int(time.mktime(time.strptime(date, "%Y%m%d%H")) * 1000)
             except Exception, e:
                 continue
             if ts >= spos and ts < epos:
                 nginx_files.append(f)
             nginx_files = sorted(nginx_files)
-        
         return [os.path.join(self.log_path, f) for f in nginx_files]
                 
     def _grab(self):
-        for log_file in self._grab_files():
-            echo("processing %s"%log_file)
-            dirname = os.path.dirname(log_file)
-            input_file = log_file
+        for log_gz_file in self._grab_files():
+            echo("processing %s"%log_gz_file)
+            dirname = os.path.dirname(log_gz_file)
+            input_file = log_gz_file
             input_file_base_name = os.path.basename(input_file)
             new_input_file = \
-                os.path.join(self.work_dir, input_file_base_name)
+                os.path.join(self.work_dir, input_file_base_name[:-4])
             
             if not os.path.exists(new_input_file):
                 #print 'cp %s %s'%(log_gz_file, self.work_dir)
-                os.system('cp %s %s'%(log_file, self.work_dir))
+                os.system('cp %s %s'%(log_gz_file, self.work_dir))
                 #print 'cd %s;gunzip %s'%(self.work_dir, input_file_base_name)
-                #os.system('cd %s;gunzip %s'%(self.work_dir, input_file_base_name))
+                os.system('cd %s;bunzip2 %s'%(self.work_dir, input_file_base_name))
             fd = open(new_input_file, "r")
             for record in fd:
                 self._handle_record(record)
@@ -105,12 +104,12 @@ class ActiveUserNginxGrabber(GrabberWorker):
 class ActiveUserGrabber(GrabberWorker):
     def __init__(self, msgh, mgrq, myname, config):
         GrabberWorker.__init__(self, msgh, mgrq, myname, config)
-        self.log_path = '/data/logs/'
+        self.log_path = '/data/logs/source'
         self.work_dir = '/data/logs/work/'
 
     def _grab_files(self):
-        spos = int(str(self.config['start']))
-        epos = int(str(self.config['end']))
+        spos = int(str(self.config['log_start_ts']))
+        epos = int(str(self.config['log_end_ts']))
         ret = []
         dates = []
         for f in os.listdir(self.log_path):
@@ -276,10 +275,12 @@ class ActiveUserCalcMgr(CalcManager):
                 data['model'] = model
                 data['count'] = count
             self.dbsession.insert(data)
+        self.dbsession.commit()
         
         data['model'] = "HISENSE"
         data['count'] = self.stat_user.count_user()
         self.dbsession.insert(data)
+        self.dbsession.commit()
         self.dbsession.close()
         
     def _user_report_day(self):
@@ -301,6 +302,7 @@ class ActiveUserCalcMgr(CalcManager):
                 data['date'] = day
                 data['count'] = count
                 self.dbsession.insert(data)
+            self.dbsession.commit()
 
         infos = self.stat_user.gen_stat_users().show_info()
         data['model'] = 'HISENSE'
@@ -308,4 +310,6 @@ class ActiveUserCalcMgr(CalcManager):
             data['date'] = day
             data['count'] = count
             self.dbsession.insert(data)
+        self.dbsession.commit()
         self.dbsession.close()
+

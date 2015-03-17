@@ -26,7 +26,7 @@ class MsghMgr(object):
     the same data for all its child process (for copy-on-write, it will
     be different after a process change something)
     '''
-    MAX_MSGH = 20
+    MAX_MSGH = 15
     def __init__(self):
         ''' firstly initialize all the queues spaces'''
         self.queues = [ MyQueue() for i in range(MsghMgr.MAX_MSGH) ]

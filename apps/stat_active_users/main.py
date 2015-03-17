@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import sys
+import copy
 import time
 import datetime
 from core.msgh import MsghMgr
@@ -71,13 +72,13 @@ def slice_ts(start_ts, end_ts, num):
         i = 0
         while s < end_ts:
             e = s + avg_delta
-            ret.append((s, e))
+            ret.append([s, e])
             s = e
         return ret
 
 grabber_num = 3
-nginx_grabber_num = 8
-calc_num = 3
+nginx_grabber_num = 4
+calc_num = 4
 def calc():
     start_day, end_day = calc_eage_days()
     print START_DESC.format(start_day, end_day, str(program_start_time)[:19])
@@ -85,18 +86,30 @@ def calc():
             time.strptime(start_day, "%Y-%m-%d")) * 1000)
     end_ts = int(time.mktime(
             time.strptime(end_day, "%Y-%m-%d")) * 1000 -1)
-    ts_list = slice_ts(start_ts, end_ts, grabber_num)
+    ts_calc_list = slice_ts(start_ts, end_ts, grabber_num)
+    ts_list = copy.deepcopy(ts_calc_list)
+
+    # get some former time and newer time logs
+    reserve = 6 # reserve hours former and newer
+    first_ts = ts_list[0][0]
+    end_ts = ts_list[-1][1]
+    first_ts = first_ts - (60 * 60 * reserve) * 1000
+    end_ts = end_ts + (60 * 60 * reserve) * 1000
+    ts_list[0][0] = first_ts
+    ts_list[-1][1] = end_ts
         
     gmgr = GrabberManager(msgh)
     for i in range(grabber_num):
         name = 'ActiveUserGrabber' + str(i)
-        config = {'start':ts_list[i][0], 'end':ts_list[i][1]}
+        config = {'start':ts_calc_list[i][0], 'end':ts_calc_list[i][1],
+                  'log_start_ts': ts_list[i][0], 'log_end_ts': ts_list[i][1]}
         gmgr.set_worker(name, ActiveUserGrabber, config)
 
     ts_list = slice_ts(start_ts, end_ts, nginx_grabber_num)
     for i in range(nginx_grabber_num):
         name = 'ActiveUserNginxGrabber' + str(i)
-        config = {'start':ts_list[i][0], 'end':ts_list[i][1]}
+        config = {'start':ts_list[i][0], 'end':ts_list[i][1],
+                  'log_start_ts': ts_list[i][0], 'log_end_ts': ts_list[i][1]}
         gmgr.set_worker(name, ActiveUserNginxGrabber, config)
         
     config = {'start':start_day, 'end':end_day}

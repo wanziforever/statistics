@@ -20,22 +20,19 @@ import json
 import os
 import time
 
-mongo_host = "127.0.0.1"
-mongo_port = 27017
-
 def default_encoder(obj):
     return obj.__json__()
 
 class PlayTimeGrabber(GrabberWorker):
     def __init__(self, msgh, mgrq, myname, config):
         GrabberWorker.__init__(self, msgh, mgrq, myname, config)
-        self.log_path = '/data/logs/'
+        self.log_path = '/data/logs/source/'
         self.work_dir = '/data/logs/work/'
         self.dups = {}
 
     def _grab_files(self):
-        spos = int(str(self.config['start']))
-        epos = int(str(self.config['end']))
+        spos = int(str(self.config['log_start_ts']))
+        epos = int(str(self.config['log_end_ts']))
         dates = []
         for f in os.listdir(self.log_path):
             if f[0:4] != 'vod_' or f[-7:] != '.log.gz':
@@ -85,6 +82,8 @@ class PlayTimeGrabber(GrabberWorker):
         userid = e.get_userid()
         code = e.get_code()
         ts = e.get_ts()
+        if ts.find('.') != -1:
+            return
         if code == "5042":
             self.dups[userid] = ts
         if code == "5011" and userid in self.dups:
@@ -100,39 +99,6 @@ class PlayTimeGrabber(GrabberWorker):
         msg.set_retention(e.get_retention())
         i = self.next_rrobin()
         self.queue.send(self.calc_queues[i], msg)
-
-class PlayTimeCollector(object):
-    def __init__(self, vender, start, end):
-        self.vender = vender
-        self.stat_time = StatTime(start, end)
-
-    def get_vender(self):
-        return self.vender
-
-    def __repr__(self):
-        s = "vender: %s, info: %s"%(self.vender, repr(self.stat_time))
-        return s
-
-top_num = 10
-tops = [0 for i in range(top_num)]
-def add_top(value):
-    i = 0
-    while i < top_num:
-        #print "tops[%s] >= %s"%(i, value)
-        if tops[i] > value:
-            i += 1
-        elif tops[i] == value:
-            return 0
-        else:
-            j = top_num -1 
-            while True:
-                if j == i:
-                    break
-                #print "top[%s] = top[%s]"%(j, j-1), tops
-                tops[j] = tops[j-1]
-                j -= 1
-            tops[i] = value
-            break
         
 class PlayTimeCalc(CalcWorker):
     def __init__(self, msgh, mgrq, myname, config):
@@ -142,7 +108,6 @@ class PlayTimeCalc(CalcWorker):
         #self.eh.register_timer(self.report_intvl * 1000,
         #                       TMTAGS.SEND_REPORT, True)
         self.stat_user = StatUser(self.config['start'], self.config['end'])
-        self.same_num = 0
 
     def _process_msg(self, msg):
         msgtype = msg.get_msgtype()
@@ -154,9 +119,9 @@ class PlayTimeCalc(CalcWorker):
             user = calc_msg.get_userid()
             vender = calc_msg.get_vender()
             retention = calc_msg.get_retention()
-            ret = add_top(int(retention))
-            if ret == 0:
-                self.same_num += 1
+            if int(retention) > 14400:
+                print "------invalid retention", retention
+                return
             #print "PlayTimeCalc::_process_msg() user: %s, vender: %s"%(user, vender)
             if vender in vender_dict:
                 vender = vender_dict[vender]
@@ -191,21 +156,6 @@ class PlayTimeCalc(CalcWorker):
 
     def _final(self):
         self._send_report()
-        #print "----top 10-----", tops
-        #print "print top records....."
-        #ff = open('aaa', 'w')
-        #ff.write(str(tops))
-        #ff.close()
-        #n = 0
-        #p = 0
-        #for i in tops:
-        #    if i == 0:
-        #        continue
-        #    p += i
-        #    n += 1
-        #print "numer in tops is ", n
-        #print "same numer for tops is ", self.same_num
-        #print "total tops is", p
         super(PlayTimeCalc, self)._final()
         
 class PlayTimeCalcMgr(CalcManager):
@@ -252,7 +202,58 @@ class PlayTimeCalcMgr(CalcManager):
 
     def _print_report(self):
         print "currently the total user:", self.stat_user.count_user()
-        self.dbsession = self.db.open('play_time_day')
+        self._duration_rate()
+        self._duration_rate_day()
+        self._duration_total_day()
+
+    def _duration_rate_day(self):
+        self.dbsession = self.db.open('play_duration_rate_day')
+        data = {"vender": '',
+                'date': '',
+                'time': 0}
+        
+        venders_time = self.stat_user.gen_stat_count_by_vender_per_day()
+        venders_user = self.stat_user.gen_stat_users_by_vender_per_day()
+
+        for vender, stat_time in venders_time.items():
+            print "--------", vender, stat_time.show_info()
+
+        for vender, stat_time in venders_user.items():
+            print "_duration_rate_day(): ", vender, stat_time.show_info()
+            if vender not in venders_time:
+                warn('_duration_rate_day():user vender %s is not in time venders[%s]'%(vender, str(venders_time)))
+                continue
+            time_infos = venders_time[vender].show_info()
+            user_infos = stat_time.show_info()
+            total, rate = 0, 0
+            data['vender'] = vender
+            for day, count in user_infos.items():
+                if day not in time_infos:
+                    warn("_duration_rate_day():user day %s is not in time days[%s]"%(day, str(time_infos.keys())))
+                    continue
+                rate = int(time_infos[day]) / int(count)
+                data['date'] = day
+                data['time'] = rate
+                self.dbsession.insert(data)
+            self.dbsession.commit()
+
+        total, rate = 0, 0
+        time_infos = self.stat_user.gen_stat_times().show_info()
+        user_infos = self.stat_user.gen_stat_users().show_info()
+        data['vender'] = 'HISENSE'
+        for day, count in user_infos.items():
+            if day not in time_infos:
+                warn('user ay %s is not in time days[%s]'%(day, str(time_infos.keys())))
+                continue
+            rate = int(time_infos[day]) / int(count)
+            data['date'] = day
+            data['time'] = rate
+            self.dbsession.insert(data)
+        self.dbsession.commit()
+        self.dbsession.close()
+        
+    def _duration_rate(self):
+        self.dbsession = self.db.open('play_duration_rate')
         data = {"vender": '',
                 'date': '%s_%s'%(self.config['start'],
                                  self.config['end']),
@@ -277,6 +278,7 @@ class PlayTimeCalcMgr(CalcManager):
             data['vender'] = vender
             data['time'] = rate
             self.dbsession.insert(data)
+        self.dbsession.commit()
 
         total, rate, u = 0, 0, 0
         time_infos = self.stat_user.gen_stat_times().show_info()
@@ -286,10 +288,38 @@ class PlayTimeCalcMgr(CalcManager):
                 continue
             total += int(time_infos[day]) / int(count)
             u += 1
+        if u == 0:
+            return
         rate = total / u
         data['vender'] = 'HISENSE'
         data['time'] = rate
         self.dbsession.insert(data)
+        self.dbsession.commit()
+        self.dbsession.close()
+
+    def _duration_total_day(self):
+        self.dbsession = self.db.open('play_duration_day')
+        data = {"vender": '',
+                'date': '',
+                'time': 0}
+        venders_time = self.stat_user.gen_stat_count_by_vender_per_day()
+        for vender, stat_time in venders_time.items():
+            time_infos = stat_time.show_info()
+            data['vender'] = vender
+            for day, count in time_infos.items():
+                data['date'] = day
+                data['time'] = count
+                self.dbsession.insert(data)
+        self.dbsession.commit()
+        
+        time_infos = self.stat_user.gen_stat_times().show_info()
+        for day, count in time_infos.items():
+            data['vender'] = 'HISENSE'
+            data['date'] = day
+            data['time'] = count
+            self.dbsession.insert(data)
+
+        self.dbsession.commit()
         self.dbsession.close()
 
     def _final(self):

@@ -80,7 +80,10 @@ class StatTime(object):
         return self.days_count[delta_day]
 
     def get_index_by_ts(self, ts):
+        #print self.mseconds_start, self.mseconds_end, ts
         if ts < self.mseconds_start or ts > self.mseconds_end:
+            #print "-----------------------------------", ts, self.mseconds_start, self.mseconds_end
+
             return -1
         self.lock.acquire()
         delta_ts = ts - self.mseconds_start
